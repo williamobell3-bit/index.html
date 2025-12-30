@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Trivia Tournament</title>
+  <title>Trivia Tournament - Multiplayer</title>
   
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@700;900&family=Inter:wght@400;500;600&display=swap');
@@ -266,51 +266,44 @@
   <div id="loading" class="container" style="padding-top: 4rem;">
     <div class="loading">
       <div class="loading-spinner"></div>
-      <p style="color: #d8b4fe;">Loading game...</p>
+      <p style="color: #d8b4fe;">Connecting to server...</p>
     </div>
   </div>
 
   <script>
     console.log('Script started');
     
-    // Check if localStorage is available
-    const storageAvailable = (() => {
-      try {
-        const test = '__storage_test__';
-        localStorage.setItem(test, test);
-        localStorage.removeItem(test);
-        return true;
-      } catch (e) {
-        return false;
-      }
-    })();
+    // Use a shared storage ID so all users can see each other's games
+    const STORAGE_ID = 'triviatournament2024';
+    const API_BASE = `https://jsonbox.io/${STORAGE_ID}`;
     
-    if (!storageAvailable) {
-      document.getElementById('loading').innerHTML = `
-        <div class="container-sm card" style="margin-top: 4rem;">
-          <h2 class="title text-center" style="font-size: 1.5rem; margin-bottom: 1rem;">Storage Not Available</h2>
-          <p style="text-align: center; color: #d8b4fe;">Please enable cookies/storage in your browser settings to play this game.</p>
-        </div>
-      `;
-    }
-    
-    // Simple storage wrapper
     const storage = {
-      get(key) {
+      async get(key) {
         try {
-          const value = localStorage.getItem(key);
-          return value ? { key, value } : null;
+          const response = await fetch(`${API_BASE}/${key}`);
+          if (response.ok) {
+            const data = await response.json();
+            return { key, value: JSON.stringify(data) };
+          }
+          return null;
         } catch (e) {
-          console.error('Storage error:', e);
+          console.error('Storage get error:', e);
           return null;
         }
       },
-      set(key, value) {
+      
+      async set(key, value) {
         try {
-          localStorage.setItem(key, value);
+          const data = JSON.parse(value);
+          // Use PUT to update or POST to create
+          await fetch(`${API_BASE}/${key}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+          });
           return { key, value };
         } catch (e) {
-          console.error('Storage error:', e);
+          console.error('Storage set error:', e);
           return null;
         }
       }
@@ -355,12 +348,13 @@
     }
 
     // Game functions
-    function createGame() {
+    async function createGame() {
       if (!state.hostName || !state.theme) {
         showError('Please fill in all fields');
         return;
       }
 
+      showSuccess('Creating game...');
       const code = generateCode();
       const newGame = {
         code,
@@ -369,10 +363,11 @@
         mode: state.gameMode,
         players: [{ name: state.hostName, id: Date.now(), isHost: true }],
         status: 'lobby',
-        announcement: ''
+        announcement: '',
+        created: Date.now()
       };
 
-      storage.set(`game:${code}`, JSON.stringify(newGame));
+      await storage.set(code, JSON.stringify(newGame));
       state.gameCode = code;
       state.playerName = state.hostName;
       state.currentGame = newGame;
@@ -381,15 +376,17 @@
       startPolling();
     }
 
-    function joinGame() {
+    async function joinGame() {
       if (!state.playerName || !state.gameCode) {
         showError('Please fill in all fields');
         return;
       }
 
-      const result = storage.get(`game:${state.gameCode}`);
+      showSuccess('Joining game...');
+      const result = await storage.get(state.gameCode);
+      
       if (!result) {
-        showError('Game not found!');
+        showError('Game not found! Check the code.');
         return;
       }
 
@@ -403,7 +400,7 @@
       const exists = game.players.find(p => p.name === state.playerName);
       if (!exists) {
         game.players.push({ name: state.playerName, id: Date.now(), isHost: false });
-        storage.set(`game:${state.gameCode}`, JSON.stringify(game));
+        await storage.set(state.gameCode, JSON.stringify(game));
       }
 
       state.currentGame = game;
@@ -426,7 +423,7 @@
 
       state.currentGame.announcement = `MATCHUPS: ${matchups}`;
       state.currentGame.status = 'playing';
-      storage.set(`game:${state.gameCode}`, JSON.stringify(state.currentGame));
+      await storage.set(state.gameCode, JSON.stringify(state.currentGame));
       
       state.announcement = state.currentGame.announcement;
       render();
@@ -435,7 +432,7 @@
       
       state.announcement = '';
       state.currentGame.announcement = '';
-      storage.set(`game:${state.gameCode}`, JSON.stringify(state.currentGame));
+      await storage.set(state.gameCode, JSON.stringify(state.currentGame));
       
       for (let i = 3; i > 0; i--) {
         state.countdown = i;
@@ -450,10 +447,10 @@
 
     // Polling
     let pollInterval;
-    function startPolling() {
+    async function startPolling() {
       if (pollInterval) clearInterval(pollInterval);
-      pollInterval = setInterval(() => {
-        const result = storage.get(`game:${state.gameCode}`);
+      pollInterval = setInterval(async () => {
+        const result = await storage.get(state.gameCode);
         if (result) {
           const game = JSON.parse(result.value);
           state.currentGame = game;
@@ -462,7 +459,7 @@
           }
           render();
         }
-      }, 2000);
+      }, 3000);
     }
 
     // Icons
@@ -479,7 +476,6 @@
       
       let html = '';
 
-      // Error/Success messages
       if (state.error) {
         html += `<div class="error-box">${state.error}</div>`;
       }
@@ -487,7 +483,6 @@
         html += `<div class="success-box">${state.success}</div>`;
       }
 
-      // Countdown
       if (state.countdown > 0) {
         html += `
           <div class="overlay">
@@ -496,7 +491,6 @@
         `;
       }
 
-      // Announcement
       if (state.announcement) {
         html += `
           <div class="announcement">
@@ -506,7 +500,6 @@
         `;
       }
 
-      // Views
       if (state.view === 'home') {
         html += `
           <div class="container slide-up" style="padding-top:4rem">
@@ -514,12 +507,12 @@
               <div class="icon-lg pulse">${icons.trophy}</div>
               <h1 class="title glow" style="font-size:4.5rem;margin-bottom:1rem">TRIVIA<br/>TOURNAMENT</h1>
               <p style="font-size:1.125rem;color:#d8b4fe">Battle in bracket-style trivia with epic powerups!</p>
-              <p style="font-size:0.875rem;color:#9ca3af;margin-top:1rem">✅ Works on any device • No login required!</p>
+              <p style="font-size:0.875rem;color:#9ca3af;margin-top:1rem">✅ TRUE multiplayer • Works across ALL devices!</p>
             </div>
             
             <div class="info-box text-center">
-              <div style="font-size:0.875rem;font-weight:600;margin-bottom:0.5rem;color:#60a5fa">📱 MULTIPLAYER READY</div>
-              <p style="font-size:0.75rem;color:#bfdbfe">Host the game, share the code, and friends can join from any device!</p>
+              <div style="font-size:0.875rem;font-weight:600;margin-bottom:0.5rem;color:#60a5fa">🌐 REAL MULTIPLAYER</div>
+              <p style="font-size:0.75rem;color:#bfdbfe">Friends on different devices can join your game with the code!</p>
             </div>
             
             <div class="grid-2">
@@ -651,8 +644,8 @@
 
       html += `
         <div class="status-indicator">
-          <div style="color:#4ade80">✅ Ready to play!</div>
-          <div style="color:#9ca3af">Open in multiple tabs to test</div>
+          <div style="color:#4ade80">✅ Multiplayer ready!</div>
+          <div style="color:#9ca3af">Cloud-synced across devices</div>
         </div>
       `;
 
